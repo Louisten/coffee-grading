@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grading Biji Kopi Hijau · Demo Alur YOLO11n</title>
+<meta name="description" content="Demo alur deteksi cacat biji kopi hijau dengan YOLO11n yang berjalan di peramban, dari foto masuk sampai grade keluar.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+
+<header class="flow-header" role="banner">
+  <div class="flow-pill" aria-label="Informasi alur">
+    <span class="mono dim">FLOW</span>
+    <strong>Grading Biji Kopi Hijau</strong>
+    <span class="mono dim">model</span><span class="mono">YOLO11n</span>
+    <span class="mono dim">conf</span><span class="mono" id="conf-label">0,25</span>
+    <span class="mono dim">IoU</span><span class="mono">0,7</span>
+    <span class="status-pill mono" id="model-status" data-state="loading" aria-live="polite">memuat model...</span>
+  </div>
+  <div class="flow-controls">
+    <label class="control" for="conf">
+      <span class="mono dim">AMBANG CONFIDENCE</span>
+      <input type="range" id="conf" min="0.10" max="0.90" step="0.05" value="0.25" aria-describedby="conf-label">
+    </label>
+    <button type="button" class="btn-toggle mono" id="fast" aria-pressed="false" title="Matikan jeda animasi antar-langkah">MODE CEPAT</button>
+    <button type="button" class="btn-toggle mono" id="retry" hidden>COBA LAGI</button>
+  </div>
+</header>
+
+<main>
+<section id="canvas" class="canvas" aria-label="Alur pemrosesan" aria-busy="false">
+
+  <article class="node node-input" id="n-input" data-status="idle">
+    <header class="node-head">
+      <span class="node-title"><span class="dot dot-input" aria-hidden="true"></span>INPUT</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <label class="dropzone" id="dropzone" for="file" tabindex="0">
+      <input type="file" id="file" accept="image/*" hidden>
+      <span class="dropzone-text" id="dropzone-text">Seret foto ke sini<br><small>atau klik untuk memilih</small></span>
+      <img id="input-thumb" alt="" hidden>
+    </label>
+    <div class="result mono" id="input-meta"></div>
+    <div class="samples" aria-label="Foto contoh">
+      <span class="mono dim">CONTOH</span>
+      <button type="button" class="sample" data-src="samples/s1_test_tinggi.jpg">test 1</button>
+      <button type="button" class="sample" data-src="samples/s2_test_rendah.jpg">test 2</button>
+      <button type="button" class="sample" data-src="samples/s3_mosaik.jpg">mosaik</button>
+      <button type="button" class="sample" data-src="samples/s4_luar_domain.jpg">luar domain</button>
+    </div>
+  </article>
+
+  <svg class="link" id="l-pre" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="5" x2="100" y2="5"/></svg>
+
+  <article class="node" id="n-pre" data-status="idle">
+    <span class="step mono">STEP_ORDER 1</span>
+    <header class="node-head">
+      <span class="node-title"><span class="dot" aria-hidden="true"></span>Praproses</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <p class="desc">Letterbox 640 × 640, bantalan abu-abu, normalisasi 0 sampai 1.</p>
+    <div class="result"><canvas id="pre-thumb" width="640" height="640" hidden></canvas><div class="mono" id="pre-meta"></div></div>
+  </article>
+
+  <svg class="link" id="l-yolo" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="5" x2="100" y2="5"/></svg>
+
+  <article class="node" id="n-yolo" data-status="idle">
+    <span class="step mono">STEP_ORDER 2</span>
+    <header class="node-head">
+      <span class="node-title"><span class="dot" aria-hidden="true"></span>YOLO11n</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <p class="desc">Backbone, neck, head. Satu lintasan maju menghasilkan kandidat kotak.</p>
+    <div class="result mono" id="yolo-meta"></div>
+  </article>
+
+  <svg class="link" id="l-nms" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="5" x2="100" y2="5"/></svg>
+
+  <article class="node" id="n-nms" data-status="idle">
+    <span class="step mono">STEP_ORDER 3</span>
+    <header class="node-head">
+      <span class="node-title"><span class="dot" aria-hidden="true"></span>Ambang + NMS</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <p class="desc">Saring skor di bawah ambang, lalu NMS IoU 0,7 agar satu kotak per objek.</p>
+    <div class="result mono" id="nms-meta"></div>
+  </article>
+
+  <svg class="link" id="l-grade" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="5" x2="100" y2="5"/></svg>
+
+  <article class="node" id="n-grade" data-status="idle">
+    <span class="step mono">STEP_ORDER 4</span>
+    <header class="node-head">
+      <span class="node-title"><span class="dot" aria-hidden="true"></span>Grading</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <p class="desc">Hitung per kelas × bobot SNI 01-2907-2008, per 100 biji.</p>
+    <div class="result"><table class="class-table" id="class-table"><tbody></tbody></table></div>
+  </article>
+
+  <svg class="link" id="l-output" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="5" x2="100" y2="5"/></svg>
+
+  <article class="node node-output" id="n-output" data-status="idle">
+    <header class="node-head">
+      <span class="node-title"><span class="dot dot-output" aria-hidden="true"></span>OUTPUT</span>
+      <span class="badge mono">MENUNGGU</span>
+    </header>
+    <div class="grade" id="grade" aria-live="polite">-</div>
+    <dl class="metrics mono">
+      <div><dt>nilai cacat/100</dt><dd id="m-per100">-</dd></div>
+      <div><dt>total biji</dt><dd id="m-total">-</dd></div>
+      <div><dt>biji cacat</dt><dd id="m-defect">-</dd></div>
+    </dl>
+    <div class="actions">
+      <button type="button" class="btn" id="dl-csv" disabled>Unduh CSV</button>
+      <button type="button" class="btn" id="dl-png" disabled>Unduh PNG</button>
+    </div>
+  </article>
+
+  <article class="node node-warn" id="n-warn" data-status="idle" hidden>
+    <header class="node-head">
+      <span class="node-title"><span class="dot dot-warn" aria-hidden="true"></span>Peringatan</span>
+      <span class="badge mono">INFO</span>
+    </header>
+    <p class="desc" id="warn-text"></p>
+  </article>
+
+</section>
+
+<section class="photo-panel" aria-label="Foto dan hasil deteksi">
+  <div class="photo-head">
+    <span class="mono dim">HASIL DETEKSI</span>
+    <ul class="legend mono" id="legend" aria-label="Warna per kelas"></ul>
+  </div>
+  <div class="photo-wrap"><canvas id="photo" aria-label="Foto dengan kotak deteksi"></canvas><p class="photo-empty" id="photo-empty">Belum ada foto.</p></div>
+</section>
+</main>
+
+<script src="vendor/ort.min.js"></script>
+<script src="grading.js?v=2"></script>
+<script src="pipeline.js?v=3"></script>
+<script src="app.js?v=6"></script>
+</body>
+</html>

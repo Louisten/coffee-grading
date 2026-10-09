@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Parity test: pipeline JS vs Python</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 24px; color: #222; }
+  table { border-collapse: collapse; margin-top: 12px; }
+  td, th { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
+  .PASS { color: #0a7a2f; font-weight: 700; } .FAIL { color: #b00020; font-weight: 700; }
+  #summary { font-size: 18px; margin-top: 16px; }
+  pre { margin: 0; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Parity test</h1>
+<p>Membandingkan pipeline JavaScript (conf 0,25, IoU 0,7) dengan <code>samples/expected.json</code> dari Colab.</p>
+<div id="status">memuat model...</div>
+<table id="rows"><tr><th>Berkas</th><th>Hasil</th><th>Kotak (JS / Python)</th><th>Hitungan / grade</th><th>Detail</th></tr></table>
+<div id="summary"></div>
+
+<script src="../vendor/ort.min.js"></script>
+<script src="../grading.js"></script>
+<script src="../pipeline.js"></script>
+<script>
+const TOL_PX = 4;   // resize canvas (browser) vs OpenCV (Ultralytics) berbeda interpolasi; selisih koordinat teramati ≤ 2,5 px
+const $ = (s) => document.querySelector(s);
+
+async function loadSession() {
+  ort.env.wasm.wasmPaths = "../vendor/";
+  return ort.InferenceSession.create("../model/yolo11n.onnx", { executionProviders: ["wasm"] });
+}
+
+// orkestrasi yang sama dipakai app.js
+async function runInference(session, img, conf) {
+  const canvas = document.createElement("canvas");
+  const meta = Pipeline.letterbox(img, canvas);
+  const tensor = new ort.Tensor("float32", Pipeline.toTensor(canvas), [1, 3, Pipeline.IMG_SIZE, Pipeline.IMG_SIZE]);
+  const out = await session.run({ [session.inputNames[0]]: tensor });
+  const o = out[session.outputNames[0]];
+  const candidates = Pipeline.decode(o.data, o.dims, Grading.CLASS_NAMES.length);
+  const { kept, dropped } = Pipeline.nms(candidates, conf);
+  const boxes = kept.map((k) => ({ ...k, box: Pipeline.unscale(k.box, meta) }));
+  const counts = {};
+  for (const b of boxes) counts[Grading.CLASS_NAMES[b.cls]] = (counts[Grading.CLASS_NAMES[b.cls]] || 0) + 1;
+  const grade = boxes.length ? Grading.gradeCounts(counts) : null;
+  return { meta, candidates, kept: boxes, dropped, counts, grade };
+}
+
+function matchBoxes(jsBoxes, pyBoxes) {
+  const used = new Set(); const misses = [];
+  for (const pb of pyBoxes) {
+    let found = -1;
+    for (let i = 0; i < jsBoxes.length; i++) {
+      if (used.has(i) || jsBoxes[i].cls !== pb[4]) continue;
+      if (jsBoxes[i].box.every((v, k) => Math.abs(v - pb[k]) <= TOL_PX)) { found = i; break; }
+    }
+    if (found < 0) misses.push(pb); else used.add(found);
+  }
+  return misses;
+}
+
+(async () => {
+  let session;
+  try { session = await loadSession(); $("#status").textContent = "model siap"; }
+  catch (e) { $("#status").textContent = "model gagal dimuat: " + e.message; $("#summary").textContent = "PARITY FAIL"; return; }
+  const expected = await (await fetch("../samples/expected.json", { cache: "no-store" })).json();
+  let allOk = true;
+  for (const [file, exp] of Object.entries(expected)) {
+    const tr = $("#rows").insertRow(); const detail = [];
+    try {
+      const blob = await (await fetch("../samples/" + file)).blob();
+      const img = await Pipeline.loadImage(blob);
+      const r = await runInference(session, img, 0.25);
+      const sameCount = r.kept.length === exp.boxes.length;
+      const sameCounts = JSON.stringify(Object.entries(r.counts).sort()) === JSON.stringify(Object.entries(exp.counts).sort());
+      const sameGrade = (r.grade ? r.grade.grade : "-") === exp.grade;
+      const misses = matchBoxes(r.kept, exp.boxes);
+      if (!sameCount) detail.push(`jumlah kotak beda: JS ${r.kept.length}, Python ${exp.boxes.length}`);
+      if (!sameCounts) detail.push(`hitungan beda: JS ${JSON.stringify(r.counts)} vs ${JSON.stringify(exp.counts)}`);
+      if (!sameGrade) detail.push(`grade beda: JS ${r.grade ? r.grade.grade : "-"} vs ${exp.grade}`);
+      if (misses.length) detail.push(`${misses.length} kotak Python tanpa padanan JS (≤ ${TOL_PX}px), contoh: ${JSON.stringify(misses[0])}`);
+      const ok = sameCount && sameCounts && sameGrade && !misses.length;
+      allOk = allOk && ok;
+      tr.innerHTML = `<td>${file}</td><td class="${ok ? "PASS" : "FAIL"}">${ok ? "PASS" : "FAIL"}</td>` +
+        `<td>${r.kept.length} / ${exp.boxes.length}<br><small>${r.candidates.length} kandidat, ${r.dropped} dibuang</small></td>` +
+        `<td><pre>${JSON.stringify(r.counts)}\n${JSON.stringify(exp.counts)}\n${r.grade ? r.grade.grade : "-"} / ${exp.grade}</pre></td>` +
+        `<td>${detail.join("<br>") || "-"}</td>`;
+    } catch (e) {
+      allOk = false;
+      tr.innerHTML = `<td>${file}</td><td class="FAIL">FAIL</td><td colspan="3">${e.message}</td>`;
+    }
+  }
+  $("#summary").textContent = allOk ? "PARITY OK" : "PARITY FAIL";
+  $("#summary").className = allOk ? "PASS" : "FAIL";
+})();
+</script>
+</body>
+</html>
